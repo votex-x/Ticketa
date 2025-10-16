@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Ticketa — Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Ticketa — Dashboard</h1>
+    <div id="login-row">
+      <button id="btn-login">Login with Discord</button>
+      <div id="user-info" style="display:none;">
+        <img id="avatar" alt="avatar" width="48" height="48"/>
+        <span id="username"></span>
+        <button id="btn-logout">Logout</button>
+      </div>
+    </div>
+
+    <section id="form-section" style="display:none;">
+      <h2>Criar Ticket</h2>
+      <label>Guild ID (será o servidor onde o bot está):<input id="guildId"/></label>
+      <label>Categoria ID (opcional):<input id="categoryId"/></label>
+      <label>Nome do canal:<input id="channelName" placeholder="ticket-nome"/></label>
+      <label>Tópico:<input id="topic"/></label>
+      <h3>Embed</h3>
+      <label>Título:<input id="embedTitle"/></label>
+      <label>Descrição:<textarea id="embedDesc"></textarea></label>
+      <label>Cor (hex):<input id="embedColor" placeholder="#2f3136"/></label>
+      <label>Thumbnail URL:<input id="embedThumb"/></label>
+      <label>Image URL:<input id="embedImage"/></label>
+      <label>Footer:<input id="embedFooter"/></label>
+      <h4>Campos (JSON)</h4>
+      <textarea id="embedFields" placeholder='[{"name":"Campo1","value":"valor","inline":false}]'></textarea>
+      <br/>
+      <button id="btn-create">Enviar pedido de ticket</button>
+    </section>
+
+    <div id="logs"></div>
+  </main>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
+  <script src="config.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

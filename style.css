@@ -1,0 +1,7 @@
+body{font-family:Inter,system-ui,Arial;margin:0;padding:24px;background:#0f1724;color:#e6eef8}
+.container{max-width:800px;margin:0 auto;background:#0b1220;padding:18px;border-radius:12px;box-shadow:0 6px 30px rgba(0,0,0,0.6)}
+input,textarea{width:100%;padding:8px;margin:6px 0;border-radius:6px;border:1px solid #263444;background:#07101a;color:#e6eef8}
+button{padding:8px 12px;border-radius:8px;border:none;cursor:pointer;background:#0ea5a5;color:#012; font-weight:600}
+label{display:block;margin-top:8px}
+h1,h2,h3{margin:8px 0}
+#logs{margin-top:12px;padding:8px;background:#021018;border-radius:8px;min-height:40px}
