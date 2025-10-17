@@ -4,40 +4,41 @@ import discord
 import asyncio
 import os
 from datetime import datetime
-import threading
 
 app = Flask(__name__)
 CORS(app)
 
+# ==============================================
+# 🔧 CLASSE PRINCIPAL - ANALISADOR DISCORD
+# ==============================================
 class SimpleDiscordAnalyzer:
     def __init__(self):
-        self.active_tokens = {}
-    
+        self.lock = asyncio.Lock()
+
     async def analyze_server(self, token, guild_id):
         """Analisa servidor usando token temporário"""
         intents = discord.Intents.all()
         bot = discord.Client(intents=intents)
-        
+
         result = {"error": "Não foi possível conectar"}
         event = asyncio.Event()
-        
+
         @bot.event
         async def on_ready():
             try:
-                print(f"Bot {bot.user} conectado!")
+                print(f"✅ Bot {bot.user} conectado!")
+
                 guild = bot.get_guild(int(guild_id))
-                
                 if not guild:
                     result.update({"error": "Servidor não encontrado ou bot não está no servidor"})
                     event.set()
                     return
-                
-                # Coleta dados básicos
-                members = guild.members
+
+                members = await guild.fetch_members(limit=None).flatten()
                 bots = [m for m in members if m.bot]
                 humans = [m for m in members if not m.bot]
                 online = [m for m in humans if m.status != discord.Status.offline]
-                
+
                 result.update({
                     "success": True,
                     "server_info": {
@@ -68,39 +69,136 @@ class SimpleDiscordAnalyzer:
                     "roles": {
                         "total": len(guild.roles),
                         "top_roles": [
-                            {"name": role.name, "members": len(role.members)} 
+                            {"name": role.name, "members": len(role.members)}
                             for role in sorted(guild.roles, key=lambda x: len(x.members), reverse=True)[:10]
                         ]
                     },
                     "analysis_time": datetime.now().isoformat()
                 })
-                
             except Exception as e:
                 result.update({"error": f"Erro na análise: {str(e)}"})
             finally:
                 event.set()
-        
+
         @bot.event
-        async def on_error(event, *args, **kwargs):
-            result.update({"error": f"Erro no bot: {event}"})
+        async def on_error(event_name, *args, **kwargs):
+            result.update({"error": f"Erro no bot: {event_name}"})
             event.set()
-        
+
         try:
-            # Timeout de 15 segundos
-            await asyncio.wait_for(bot.start(token), timeout=15.0)
-        except asyncio.TimeoutError:
-            result.update({"error": "Timeout - Bot demorou muito para conectar"})
+            # 🔒 Bloqueia análise simultânea
+            async with self.lock:
+                # Executa bot por tempo limitado
+                task = asyncio.create_task(bot.start(token))
+                try:
+                    await asyncio.wait_for(event.wait(), timeout=15.0)
+                except asyncio.TimeoutError:
+                    result.update({"error": "Timeout - Bot demorou muito para conectar"})
+                finally:
+                    await bot.close()
+                    task.cancel()
+
+        except discord.errors.LoginFailure:
+            result.update({"error": "Token inválido ou expirado"})
         except Exception as e:
-            result.update({"error": f"Erro de conexão: {str(e)}"})
-        finally:
-            if not bot.is_closed():
-                await bot.close()
-        
-        await event.wait()
+            result.update({"error": f"Erro inesperado: {str(e)}"})
+
         return result
 
-# Instância global
+
+# ==============================================
+# 🌐 FUNÇÕES DE SUPORTE
+# ==============================================
 analyzer = SimpleDiscordAnalyzer()
+
+def run_async(coro):
+    """Executa corotina de forma síncrona"""
+    return asyncio.run(coro)
+
+
+# ==============================================
+# ⚙️ ENDPOINTS FLASK
+# ==============================================
+@app.route('/')
+def home():
+    return jsonify({
+        "message": "🚀 Discord Public API - v2.0",
+        "status": "online",
+        "endpoints": {
+            "POST /api/analyze": "Analisar servidor",
+            "GET /api/health": "Status da API"
+        },
+        "example": {
+            "method": "POST",
+            "url": "/api/analyze",
+            "body": {"token": "seu_token_aqui", "guild_id": "123456789"}
+        }
+    })
+
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_server():
+    """Endpoint principal corrigido"""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "Envie JSON no body"}), 400
+
+        token = data.get('token', '').strip()
+        guild_id = data.get('guild_id', '').strip()
+
+        if not token:
+            return jsonify({"error": "Token é obrigatório"}), 400
+        if not guild_id:
+            return jsonify({"error": "guild_id é obrigatório"}), 400
+
+        # Execução
+        result = run_async(analyzer.analyze_server(token, guild_id))
+        return jsonify(result)
+
+    except Exception as e:
+        return jsonify({
+            "error": f"Erro interno: {str(e)}",
+            "tip": "Verifique se o token e guild_id estão corretos"
+        }), 500
+
+
+@app.route('/api/analyze/get', methods=['GET'])
+def analyze_get():
+    """Versão GET para teste rápido"""
+    token = request.args.get('token', '')
+    guild_id = request.args.get('guild_id', '')
+
+    if not token or not guild_id:
+        return jsonify({"error": "Use: /api/analyze/get?token=SEU_TOKEN&guild_id=123456789"})
+
+    result = run_async(analyzer.analyze_server(token, guild_id))
+    return jsonify(result)
+
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Discord Public API"
+    })
+
+
+@app.route('/api/test', methods=['GET'])
+def test():
+    return jsonify({
+        "message": "API está funcionando!",
+        "next_step": "Use POST /api/analyze com seu token"
+    })
+
+
+# ==============================================
+# 🚀 EXECUÇÃO LOCAL
+# ==============================================
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)analyzer = SimpleDiscordAnalyzer()
 
 def run_async_in_thread(coro):
     """Executa corotina em thread separada"""
