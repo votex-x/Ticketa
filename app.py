@@ -1,106 +1,206 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import discord
-from discord.ext import commands
 import asyncio
-import aiohttp
-import json
-from datetime import datetime, timedelta
 import os
-from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
+import threading
 
 app = Flask(__name__)
-CORS(app)  # Permite acesso de qualquer domínio
+CORS(app)
 
-# Thread pool para operações assíncronas
-executor = ThreadPoolExecutor(max_workers=10)
-
-class DiscordBotManager:
+class SimpleDiscordAnalyzer:
     def __init__(self):
-        self.active_bots = {}
+        self.active_tokens = {}
     
-    async def create_bot_instance(self, token):
-        """Cria uma instância temporária do bot"""
+    async def analyze_server(self, token, guild_id):
+        """Analisa servidor usando token temporário"""
         intents = discord.Intents.all()
-        bot = commands.Bot(command_prefix='!', intents=intents, help_command=None)
+        bot = discord.Client(intents=intents)
         
-        # Cache de dados
-        bot.cache_data = {}
-        bot.token = token
+        result = {"error": "Não foi possível conectar"}
+        event = asyncio.Event()
         
         @bot.event
         async def on_ready():
-            print(f'Bot {bot.user.name} conectado temporariamente')
-        
-        return bot
-    
-    async def get_guild_data(self, token, guild_id):
-        """Obtém dados do servidor usando token temporário"""
-        try:
-            bot = await self.create_bot_instance(token)
-            
-            # Função para rodar o bot temporariamente
-            async def run_temp_bot():
-                try:
-                    await bot.start(token)
-                except Exception as e:
-                    print(f"Erro no bot: {e}")
-            
-            # Inicia o bot em background
-            bot_task = asyncio.create_task(run_temp_bot())
-            
-            # Aguarda o bot ficar pronto
-            await asyncio.sleep(5)
-            
-            if not bot.is_ready():
-                return {"error": "Bot não conseguiu conectar"}
-            
-            guild = bot.get_guild(int(guild_id))
-            if not guild:
-                await bot.close()
-                return {"error": "Servidor não encontrado ou bot não está no servidor"}
-            
-            # Coleta dados completos
-            data = await self.analyze_guild(guild)
-            
-            # Fecha a conexão do bot
-            await bot.close()
-            
-            return data
-            
-        except Exception as e:
-            return {"error": f"Erro na análise: {str(e)}"}
-    
-    async def analyze_guild(self, guild):
-        """Análise completa do servidor"""
-        
-        # Dados básicos
-        members = guild.members
-        bots = [m for m in members if m.bot]
-        humans = [m for m in members if not m.bot]
-        online_members = [m for m in humans if m.status != discord.Status.offline]
-        
-        # Análise de cargos
-        roles_analysis = []
-        for role in sorted(guild.roles, key=lambda x: x.position, reverse=True):
-            if len(role.members) > 0 and not role.is_default():
-                roles_analysis.append({
-                    "name": role.name,
-                    "id": str(role.id),
-                    "members_count": len(role.members),
-                    "color": str(role.color),
-                    "position": role.position
+            try:
+                print(f"Bot {bot.user} conectado!")
+                guild = bot.get_guild(int(guild_id))
+                
+                if not guild:
+                    result.update({"error": "Servidor não encontrado ou bot não está no servidor"})
+                    event.set()
+                    return
+                
+                # Coleta dados básicos
+                members = guild.members
+                bots = [m for m in members if m.bot]
+                humans = [m for m in members if not m.bot]
+                online = [m for m in humans if m.status != discord.Status.offline]
+                
+                result.update({
+                    "success": True,
+                    "server_info": {
+                        "name": guild.name,
+                        "id": str(guild.id),
+                        "owner": str(guild.owner),
+                        "created_at": guild.created_at.isoformat(),
+                        "member_count": guild.member_count,
+                        "icon_url": str(guild.icon.url) if guild.icon else None
+                    },
+                    "members": {
+                        "total": len(members),
+                        "humans": len(humans),
+                        "bots": len(bots),
+                        "online": len(online),
+                        "breakdown": {
+                            "humans_percentage": round((len(humans) / len(members)) * 100, 2),
+                            "bots_percentage": round((len(bots) / len(members)) * 100, 2),
+                            "online_percentage": round((len(online) / len(humans)) * 100, 2) if humans else 0
+                        }
+                    },
+                    "channels": {
+                        "text": len(guild.text_channels),
+                        "voice": len(guild.voice_channels),
+                        "categories": len(guild.categories),
+                        "total": len(guild.channels)
+                    },
+                    "roles": {
+                        "total": len(guild.roles),
+                        "top_roles": [
+                            {"name": role.name, "members": len(role.members)} 
+                            for role in sorted(guild.roles, key=lambda x: len(x.members), reverse=True)[:10]
+                        ]
+                    },
+                    "analysis_time": datetime.now().isoformat()
                 })
+                
+            except Exception as e:
+                result.update({"error": f"Erro na análise: {str(e)}"})
+            finally:
+                event.set()
         
-        # Análise de canais
-        text_channels = []
-        voice_channels = []
+        @bot.event
+        async def on_error(event, *args, **kwargs):
+            result.update({"error": f"Erro no bot: {event}"})
+            event.set()
         
-        for channel in guild.channels:
-            channel_data = {
-                "name": channel.name,
-                "id": str(channel.id),
-                "position": channel.position
+        try:
+            # Timeout de 15 segundos
+            await asyncio.wait_for(bot.start(token), timeout=15.0)
+        except asyncio.TimeoutError:
+            result.update({"error": "Timeout - Bot demorou muito para conectar"})
+        except Exception as e:
+            result.update({"error": f"Erro de conexão: {str(e)}"})
+        finally:
+            if not bot.is_closed():
+                await bot.close()
+        
+        await event.wait()
+        return result
+
+# Instância global
+analyzer = SimpleDiscordAnalyzer()
+
+def run_async_in_thread(coro):
+    """Executa corotina em thread separada"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+@app.route('/')
+def home():
+    return jsonify({
+        "message": "🚀 Discord Public API - FIXED",
+        "status": "online",
+        "endpoints": {
+            "POST /api/analyze": "Analisar servidor",
+            "GET /api/health": "Status da API"
+        },
+        "example": {
+            "method": "POST",
+            "url": "/api/analyze", 
+            "body": {
+                "token": "seu_token_aqui",
+                "guild_id": "123456789"
+            }
+        }
+    })
+
+@app.route('/api/analyze', methods=['POST'])
+def analyze_server():
+    """Endpoint principal corrigido"""
+    try:
+        data = request.get_json()
+        
+        if not data:
+            return jsonify({"error": "Envie JSON no body"}), 400
+        
+        token = data.get('token', '').strip()
+        guild_id = data.get('guild_id', '').strip()
+        
+        if not token:
+            return jsonify({"error": "Token é obrigatório"}), 400
+        
+        if not guild_id:
+            return jsonify({"error": "guild_id é obrigatório"}), 400
+        
+        # Validação básica
+        if not token.startswith('MT') or len(token) < 50:
+            return jsonify({"error": "Token inválido"}), 400
+        
+        # Executa análise em thread separada
+        result = run_async_in_thread(
+            analyzer.analyze_server(token, guild_id)
+        )
+        
+        return jsonify(result)
+        
+    except Exception as e:
+        return jsonify({
+            "error": f"Erro interno: {str(e)}",
+            "tip": "Verifique se o token e guild_id estão corretos"
+        }), 500
+
+@app.route('/api/analyze/get', methods=['GET'])
+def analyze_get():
+    """Versão GET para teste rápido"""
+    token = request.args.get('token', '')
+    guild_id = request.args.get('guild_id', '')
+    
+    if not token or not guild_id:
+        return jsonify({
+            "error": "Use: /api/analyze/get?token=SEU_TOKEN&guild_id=123456789"
+        })
+    
+    result = run_async_in_thread(
+        analyzer.analyze_server(token, guild_id)
+    )
+    
+    return jsonify(result)
+
+@app.route('/api/health', methods=['GET'])
+def health():
+    return jsonify({
+        "status": "healthy",
+        "timestamp": datetime.now().isoformat(),
+        "service": "Discord Public API"
+    })
+
+@app.route('/api/test', methods=['GET'])
+def test():
+    """Endpoint de teste simples"""
+    return jsonify({
+        "message": "API está funcionando!",
+        "next_step": "Use POST /api/analyze com seu token"
+    })
+
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)                "position": channel.position
             }
             
             if isinstance(channel, discord.TextChannel):
